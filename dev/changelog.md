@@ -1,0 +1,312 @@
+# Development Changelog
+
+Running log of every change to this project. **Oldest first** — read top to bottom to see how the project evolved. If you are picking this up from a previous session, read this file first.
+
+**Conventions**
+
+- Append new entries to the **bottom** of "Completed work" (before "Open work"). Never rewrite or reorder existing entries.
+- Every meaningful change (code, config, docs, behavior) gets an entry, containing:
+  - `## YYYY-MM-DD — short title`
+  - **Goal / why** — what was being solved and why
+  - **Changes** — files touched and what changed in each
+  - **Decisions** — non-obvious design choices, so they aren't "re-discovered" or accidentally undone
+  - **Verification** — what was actually run/tested to confirm it works
+- See `AGENTS.md` for the full project rules (all coding agents must follow them).
+
+---
+
+## Completed work
+
+## 2026-08-29 → 2026-08-30 — Initial build: upload + print web UI
+
+**Goal / why.** User (Finnish speaker, working on macOS dev machine; the app targets the Linux box where the cutter is attached) wanted a minimal web UI to:
+
+1. upload HPGL files to a folder on the server, and
+2. press a print button that sends the selected file raw to the cutter — the printing workflow is known to work in bash as `cat file.hpgl > /dev/usb/lp1`, so the app had to reproduce exactly that.
+
+**Changes.** (repo was empty; everything below is new)
+
+| File | What |
+|---|---|
+| `server.py` (437 lines) | Zero-dependency Python 3 stdlib HTTP server (`ThreadingHTTPServer`). Serves the UI; endpoints: `GET /api/files`, `POST /api/upload` (multipart, multi-file), `DELETE /api/files?name=`, `POST /api/print` (JSON, enqueues jobs), `GET /api/jobs`, `GET /api/config`. Minimal hand-rolled multipart parser. Print jobs run on a **single worker thread** (printer takes one job at a time). Config via CLI flags + env: `--bind/--port/--upload-dir/--printer-dev/--allowed-exts/--print-timeout/--max-upload-mb` (defaults: `0.0.0.0:8080`, `./uploads`, `/dev/usb/lp1`, `hpgl,hgl`, 600 s, 100 MB). |
+| `static/index.html` (350 lines) | Single-file dark UI, vanilla JS, no frameworks: drag & drop upload zone, file table (name/size/mtime + Print/Delete per row), "Print all" button, live job list with status pills (queued/printing/done/error) polled every 2.5 s, toasts. UI reads `/api/config` for device name, upload dir and accept-filter. |
+| `README.md` | Quick start, config table, printer permission options (root / `lp` group / udev rule), how to find the right `lpX`, systemd unit, API table, security notes. |
+| `.gitignore` | `uploads/`, `__pycache__/`, `*.pyc`. |
+
+**Decisions (why they exist — don't silently undo).**
+
+- **Zero dependencies (stdlib only):** deployment to the cutter box is "copy two files". No venv, no pip, no Node.
+- **Print = `sh -c 'cat <abs path> > <device>'`** via `subprocess.run` with `shlex.quote` on both operands — literal bash semantics the user already trusts. Do not "improve" this to a direct Python file copy unless asked; the raw `cat > /dev/usb/lpX` path is the proven workflow.
+- **One worker thread + queue:** LP devices can't take concurrent writes; jobs are serialized in enqueue order. Job states: `queued → printing → done | error`; `returncode < 0` is reported as "killed by signal N (printer offline or busy?)" (that's what SIGPIPE from a dead printer looks like).
+- **Filenames sanitized to `[A-Za-z0-9._-]`** (basename + non-alnum → `_`); all user-supplied paths are resolved and checked `relative_to(upload_dir)` to block traversal.
+- **Re-upload with same name replaces the file** (intentional: re-uploading a fixed design keeps the same name).
+- **Only allowed extensions upload** (`hpgl,hgl` by default); other types get a 400 with the reason. Non-printable files would still appear in the file list, so `printable` flag is carried per file.
+- Job history is in-memory only, capped at 50, newest-first in the API. Files on disk are the source of truth; the `uploads/` dir survives restarts, the job list does not.
+
+**Bug found & fixed during this session.**
+
+- Extension check compared a dotless name (`"hpgl"`) against dotted entries (`".hpgl"`) → every upload was rejected, and the error message showed `..hpgl, ..hgl`. Fix: `CFG["allowed_exts"]` stores **dotless** names; `_is_printable()` strips the dot from the suffix; the upload check reuses `_is_printable()` so there is one source of truth.
+
+**Verification.** Ran the server locally (`--printer-dev /tmp/fakeprinter`, a temp file standing in for the raw device, since macOS has no `/dev/usb`) and exercised the whole API with curl:
+
+- upload `.hpgl` → saved; upload `.txt` → 400; re-upload same name → replaced
+- print → job `done`, "13 bytes written", and the fake device contained the exact file bytes (confirms the `cat >` mechanics)
+- two prints queued back-to-back → both ran serially, both done
+- missing file / `../` traversal on print and delete → 400; delete → works; UI page + config endpoint serve correctly
+- `python3 -m py_compile server.py` passes
+- User then used the live UI in a browser and uploaded a real design (`napit.hpgl`, ~3.5 KB) — no errors.
+
+---
+
+## 2026-08-30 — Dev changelog + agent conventions
+
+**Goal / why.** User wants a persistent, human-readable record of what was done and **why**, that survives session closures and can be continued later.
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `dev/changelog.md` | This file — back-filled with the full initial-build history above. |
+| `AGENTS.md` | New workspace instruction file: tells every coding agent working in this repo to read `dev/changelog.md` first and append an entry after each meaningful change; restates the non-negotiables (zero deps, cat-based printing, no auth assumption). |
+
+**Decisions.**
+
+- Changelog lives in `dev/` (not repo root) to keep the deployable app (`server.py` + `static/`) visually separate from development notes.
+- Chronological, append-only: reading top→bottom = project history; agents only ever append.
+- `AGENTS.md` is the cross-session mechanism — it's what future agents load before acting, so the "note things down" habit persists without the user repeating it.
+
+**Verification.** Files created and reviewed; nothing else touched.
+
+---
+
+## 2026-08-30 — Removed "Print all" button from UI
+
+**Goal / why.** User: a bulk "Print all" button is not usable for a vinyl cutter — every design is a separate physical cut job, so batch printing from one button makes no sense. Remove it; printing stays an explicit per-file action.
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `static/index.html` | Removed the `#print-all` button from the header (and the now-unused `.spacer` flex spacer next to it), its `disabled` toggle in `renderFiles()`, its `onclick` wiring, and the two now-dead CSS rules (`.spacer`, `button#print-all`). Per-row **Print** buttons and the shared `printFiles()` helper stay — printing several files = press Print per row. |
+| `README.md` | Features bullet: "per file (or *Print all*)" → "per file". |
+
+**Decisions.**
+
+- Deliberate UI simplification, not a capability removal: the `POST /api/print` API still accepts a list (`{"files": [...]}`) and the server queue still serializes jobs; only the UI no longer offers one-click bulk printing. If the user later wants batch printing back, it's a 2-line UI addition.
+- Earlier changelog entries still mention "Print all" as part of the initial build — left untouched (append-only log).
+
+**Verification.** Grep confirms zero remaining `print-all` / `spacer` / `Print all` references in `static/index.html`. The still-running test server (:8099) reads the static file from disk per request; curled `/` → HTTP 200, 0 references in served HTML, header badges intact. `server.py` untouched.
+
+---
+
+## 2026-08-30 — Non-root printer permissions (docs)
+
+**Goal / why.** User tried the app on the real device (Linux box; dash `sh: 1:` error format → Debian/Ubuntu/Raspbian) and got `sh: 1: cannot create /dev/usb/lp1: Permission denied` — the device node exists (right `lpX` found) but is `660 root:lp` and the server user isn't in that group. User explicitly wants the printer granted to the user, **not** running the server as root.
+
+**Changes.** (docs only — `server.py` untouched; the app already surfaces exactly this stderr text in the job list)
+
+| File | What |
+|---|---|
+| `README.md` | Replaced "Printer permissions" section: non-root path is now the documented default — `usermod -aG lp` + logout/login + server restart, a udev rule pinning `MODE=0660, GROUP=lp` for all `lp[0-9]*` nodes (survives reboot/replug), a no-cut verify step (`: > /dev/usb/lp1`), a minimal 10-unit test-cut command, a dedicated-`vinyl`-group variant, and the systemd `SupplementaryGroups=lp` gotcha. Running as root demoted to "last resort". The systemd unit example now uses `User=youruser` + `SupplementaryGroups=lp` instead of `User=root`. |
+
+**Decisions.**
+
+- Non-root is now the documented deployment default, per user decision. The `SupplementaryGroups=` note matters: systemd does not reliably apply `usermod`-added groups to a service, so the unit spells the group out.
+- udev pins mode `660` + group (not `666`) — least privilege; world-writable device nodes are no longer suggested.
+
+**Verification.** Not run — documentation only; the commands must be executed on the user's Linux box (macOS dev machine has no `/dev/usb`). Steps follow standard udev/LP semantics. User is expected to confirm on the device.
+
+---
+
+## 2026-08-30 — Real-device facts: node is `lp0` + stable-symlink recipe (docs)
+
+**Goal / why.** User ran `ls -l /dev/usb/lp*` on the Linux box: `crw-rw---- 1 root lp 180, 0 ... /dev/usb/lp0` — two facts follow:
+
+1. Group is `lp`, mode 660 → the standard non-root recipe applies unchanged (the earlier `usermod -aG lp` steps, aimed at `lp0` now).
+2. **Only `lp0` exists** — but the earlier permission error was against `lp1` (and the app's default is `/dev/usb/lp1`). Node numbers evidently shifted at some point (classic udev renumbering on replug/reboot), so a fixed `--printer-dev /dev/usb/lpN` is fragile.
+
+**Changes.** (docs only)
+
+| File | What |
+|---|---|
+| `README.md` | Added a "Stable device name (recommended)" block to the permissions section: `lsusb` → note `<vendor>:<product>` → add a udev line `SUBSYSTEM=="lp", ATTRS{idVendor}=="...", ATTRS{idProduct}=="...", SYMLINK+="vinylcutter", MODE="0660", GROUP="lp"` (vendor/product placeholders), then run the app with `--printer-dev /dev/vinylcutter` so renumbering stops mattering. |
+
+**Decisions.**
+
+- App default stays `/dev/usb/lp1`; per-machine node/symlink is configuration, not code. The user's box needs `--printer-dev /dev/usb/lp0` (or the `vinylcutter` symlink once the udev line is in).
+- The symlink rule matches the `lp` subsystem filtered by the cutter's USB IDs, so other USB printers on the same box are unaffected.
+
+**Verification.** Not run — documentation only. Needs the user's `lsusb` output to produce the exact vendor/product IDs; user is expected to confirm `usermod` + `: > /dev/usb/lp0` on the box.
+
+---
+
+## 2026-08-30 — Permission-error fix hint in the UI
+
+**Goal / why.** User hits `Permission denied` when pressing Print on the real machine and the raw error (`sh: 1: cannot create /dev/usb/lp1: Permission denied`) doesn't say how to fix it. Request: when a print fails with a permission error, show the fix steps (add user to printer group, re-login, verify) directly in the UI.
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `server.py` | Jobs now carry a `hint` field (default `""`). In `_run_job()`, when `sh` exits non-zero and stderr contains `permission denied` (case-insensitive), the job gets a 3-step fix hint using the **configured** `printer_dev` path: 1) `sudo usermod -aG lp $USER` 2) log out and back in **and restart the app** 3) `: > <device> && echo ok`. The raw stderr stays as the job message. |
+| `static/index.html` | Job rows wrapped in a `.job-block`; when a job has a hint, an amber monospace `.job-hint` block renders under the row (via `textContent` — no HTML injection). `.file`/`.msg` spans got `title` tooltips so truncated text is hover-readable. |
+| `README.md` | "How printing works" notes that permission errors carry a fix hint in the UI. |
+
+**Decisions.**
+
+- Hint is generated server-side with the *configured* device path (not hardcoded `lp0`) — this also surfaces the earlier lp0/lp1 mismatch: if the app is still pointed at the wrong node, the hint shows exactly which node it tried.
+- Step 2 explicitly says **restart the app** — a running process keeps its old groups; without it, `usermod` appears to "not work" (the user's exact pain point from the previous message).
+- Only permission errors get a hint; other failures keep the current raw error/signal text. The `hint` field makes it trivial to add more known-fix hints later (e.g. `No such file or directory` → check `ls /dev/usb/lp*`).
+
+**Verification.** `py_compile` OK. Restarted the scratch server (:8099) with `--printer-dev /tmp/rodev/lp` inside a `chmod 555` dir → printed → job `error`, message `sh: /tmp/rodev/lp: Permission denied`, hint = 3-step text with the real path (confirmed via `/api/jobs`). Restarted with a working `/tmp/fakeprinter` → job `done`, `hint: ""`. Served `/` contains the new `job-block`/`job-hint` code. (On the user's dash box the message reads `sh: 1: cannot create ...` — the check matches `permission denied` either way.)
+
+---
+
+## 2026-08-30 — Selectable printer device in the page header
+
+**Goal / why.** User: *"can you make it so that the printer is selectable in the top of the page so it's possible to change the device directly there if there's multiple printers available".* The real machine has **both** `/dev/usb/lp0` and `/dev/usb/lp1`, and LP node numbers can shift on replug/reboot — so the user should not have to edit `--printer-dev` / restart the service just to point at the right node.
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `server.py` | New helpers `_list_printer_devices()` (expands the `dev_scan` globs + always includes the currently configured device, with an `exists` flag, sorted) and `_valid_device_path()` (security guard: rejects `..`, requires `/[A-Za-z0-9._/-]+`, then requires `/dev/` prefix **or** a match against a dev-scan pattern). New routes `GET /api/devices` → `{devices, current}` and `POST /api/devices` → `_api_devices_set()` (validates, then swaps `CFG["printer_dev"]` at runtime). New `--dev-scan` / `DEV_SCAN` flag (default `/dev/usb/lp*,/dev/lp*`, also in the docstring env list); startup banner gains a `devices : ...` line. `import fnmatch`, `import glob` added. |
+| `static/index.html` | Header printer badge is now a `<select id="printer-select">` (`.badge select` CSS keeps the pill look); `state.devicesKey` + `loadDevices()` polls `/api/devices` on every refresh but only rebuilds options when the list/current actually changed (an open dropdown isn't disturbed; missing devices show "(missing)" instead of being hidden); `change` listener POSTs the new device, toasts `printer → X`, and reverts the selection on error. Dead `cfg-dev` init line removed. |
+| `README.md` | Features bullet for header switching; `--dev-scan`/`DEV_SCAN` config-table row; `GET`/`POST /api/devices` API rows; explicit note that **UI selection is per-instance only** (permanent = `--printer-dev`/`PRINTER_DEV`/systemd); "How printing works" now says jobs go to the *currently selected* device. |
+
+**Decisions.**
+
+- **Runtime-only, no persistence file.** Choosing in the UI changes the running process only; the durable knob stays the CLI/env/systemd setting. Keeps the config model single-sourced (one `CFG["printer_dev"]`, no new state file) and survives the zero-deps, copy-two-files deployment story. Persistence listed under Open work if ever requested.
+- **Whitelist on the POST (unauthenticated client):** the web client is on the trusted LAN with no auth, so `_api_devices_set` refuses anything that is not under `/dev/` or matched a `--dev-scan` glob. This blocks e.g. `cat file > /etc/passwd` via the device endpoint; the safe-charset regex also blocks shell metacharacters (harmless anyway — `shlex.quote` is applied in `_run_job`).
+- **`--dev-scan` globs** (default `/dev/usb/lp*,/dev/lp*`) double as the knob for the user's planned stable `/dev/vinylcutter` symlink — set `--dev-scan /dev/vinylcutter` and it appears in the dropdown. The currently configured device is always listed (with `exists` false if the node is gone) so the UI never loses the active target.
+- Missing devices are rendered as "(missing)" rather than disabled: the node can come back on replug without a page refresh, and the user may still want to queue against it.
+- The permission-error fix hint (previous entry) reads `CFG["printer_dev"]` at job time, so it automatically tracks the newly selectable device — no change needed there.
+
+**Verification.** `py_compile` OK. Scratch server on `:8099` restarted with the new code (`--printer-dev /dev/null --dev-scan "/dev/null,/tmp/printer*"`; macOS has no `/dev/usb`, so `/tmp/printer0` + `/tmp/printer1` empty files stand in for the LP nodes):
+
+- `GET /api/devices` → 3 entries (`/dev/null`, `/tmp/printer0`, `/tmp/printer1`), `current` = `/dev/null`
+- `POST {"device":"/tmp/printer0"}` → 200 `{"current":"/tmp/printer0"}`; then uploaded `design.hpgl` and printed → job `done`, `13 bytes written to /tmp/printer0`, and the fake device contained the exact file bytes (the switched target is what `cat >` actually used)
+- switched back to `/dev/null` → next print wrote to `/dev/null`; `/tmp/printer0` content untouched
+- `POST` `/etc/passwd`, `../etc/passwd`, empty → all rejected 400 (whitelist works)
+- served `/` contains `printer-select` (3×) and `loadDevices` (3×); zero `print-all` references remain; UI opened in the in-app browser
+
+---
+
+## 2026-08-30 — Fixed Print/Delete button placement in the file table
+
+**Goal / why.** User: *"can you fix the position of print and delete buttons, they are not in correct position in the table under the actions".* Root cause: in `renderFiles()` the `.row-actions` div was `tr.appendChild()`-ed as a **direct child of `<tr>`** — a `<div>` is not legal table markup, so browsers foster-parent it (move it out of the table entirely). The buttons therefore rendered outside/below the table instead of in the Actions cell. (Latent since the initial build; the header's `text-align:right` on the Actions column made the misalignment visible.)
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `static/index.html` | `renderFiles()` now emits a fourth `<td class="actions">` in the row markup and appends the buttons div into `tr.lastElementChild` (a real cell). CSS: `.row-actions` changed from `display: flex` to `display: inline-flex` and new `td.actions { text-align: right; }` so the buttons sit right-aligned, flush under the right-aligned "Actions" header. Added a comment explaining why the td wrapper exists, so it doesn't get "cleaned up" again. |
+
+**Decisions.**
+
+- Kept the existing `.row-actions` flex row (button spacing/gap) rather than laying the buttons out individually in the cell — `inline-flex` + right-align is the minimal correct fix.
+- No backend/API change; `server.py` untouched.
+
+**Verification.** `server.py` untouched (no compile needed). The still-running scratch server (:8099) reads `static/index.html` from disk per request, so no restart was needed: served `/` now contains `td.actions` rule, `inline-flex`, the `<td class="actions">` markup and `lastElementChild`; `/api/files` returns the 3 uploaded files so rows render; page opened in the in-app browser — buttons now sit inside the Actions column, right-aligned. `server.py` untouched.
+
+---
+
+## 2026-08-30 — Search filter for the file list
+
+**Goal / why.** User: *"create a search filter for the files so it's possible to quickly find a file from the list".* With a running cutter the upload folder accumulates designs; scrolling through the table to find one is slow. A name filter makes the list instantly browsable.
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `static/index.html` | New `<input type="search" id="file-search">` in the Files card header (right side via `margin-left:auto`; `.card h2 input` CSS; 110 px on ≤640 px screens). `state.search` added; `renderFiles()` now renders a case-insensitive substring match on the filename. While filtering, the count shows `matched/total` (e.g. `1/3`) and the empty state reads `No files match “…”` (vs “No files uploaded yet.”). `input` event re-renders immediately; the state survives the 2.5 s background refreshes so the filter persists while the list updates. |
+| `README.md` | Features bullet for the search box. |
+
+**Decisions.**
+
+- **Client-side only, no API change.** `GET /api/files` already returns the whole list and the upload folder is small (a few designs); filtering in JS is instant and keeps `server.py` untouched (no compile/deploy impact beyond the one static file). A server-side query param can be added later if the folder ever gets big.
+- Case-insensitive substring match on the full filename (not a prefix match) — closest to how people type when hunting a file.
+- Filter state lives in `state` (not the input) and the input is never rebuilt on refresh, so typing is never disturbed by the poll cycle.
+
+**Verification.** `server.py` untouched. The still-running scratch server (:8099) reads `static/index.html` per request (no restart needed): served `/` contains the `file-search` input (2×: markup + listener) and the `No files match` message; the page was opened in the in-app browser — the 3 uploaded files render and the filter box sits right-aligned in the Files header. Filter behavior (substring match, count `n/total`, empty message) is plain JS over the loaded list; the served markup/JS was confirmed present.
+
+---
+
+## 2026-08-30 — Per-file button relabeled Print → Cut
+
+**Goal / why.** User: *"can you change the print buttons to say 'cut' instead".* The machine is a vinyl **cutter** — the action it performs is cutting, so the button should say that, not "Print".
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `static/index.html` | Per-file action button text `"▶ Print"` → `"✂ Cut"` (scissors glyph matches the header logo; tooltip `cat <file> > <device>` and click behavior unchanged). |
+| `README.md` | Features bullet "**Print** button per file" → "**Cut** button per file". |
+
+**Decisions.**
+
+- Only the button label changed; the internal `printFiles()` helper, job states, the "Print jobs" card, toasts and API names (`/api/print`, "queued for printing") intentionally stay print-flavored — the *mechanism* really is printing to an LP device, and the user only asked for the button text. Rename the rest only if the user wants it.
+- Glyph: `✂` (not `▶`) to signal the physical action; swap back to `▶` in one character if it looks off next to the scissor logo.
+
+**Verification.** `server.py` untouched. The still-running scratch server (:8099) re-serves the static file per request: served `/` contains `✂ Cut` (1×) and zero `▶ Print` references; page opened in the in-app browser with the 3 uploaded files — buttons render as "✂ Cut" per row.
+
+---
+
+## 2026-08-30 — "Clear all" button for the print jobs log
+
+**Goal / why.** User: *"add a 'clear all' button to top of the print jobs so that the log can be cleaned if users wants to do so".* The job list is an in-memory log (capped at 50); on a machine in production it fills up with old done/error entries and the user wants a way to wipe it.
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `server.py` | New `DELETE /api/jobs` → `_api_jobs_clear()`: removes all jobs whose status is `done` or `error` from the in-memory history, returns `{"cleared": n}`. Wired into `do_DELETE` (with an explicit `return` after the branch). |
+| `static/index.html` | **Clear all** button (`.small.danger`, right side via `margin-left:auto`) in the Print jobs card header; disabled whenever no finished jobs exist; click calls `DELETE /api/jobs`, toasts `Cleared N finished job(s)`, refreshes. `renderJobs()` updates the disabled state each poll. |
+| `README.md` | "How printing works" note (in-memory log, Clear all semantics) + `DELETE /api/jobs` API-table row. |
+
+**Decisions.**
+
+- **Clears *finished* jobs only.** A `queued`/`printing` job is never removed from the list: the `cat` process must run to completion (killing it would abort the physical cut mid-design), and the user should see its final result. The in-flight `cat` continues regardless of list bookkeeping — this change only touches the history dict, never the subprocess.
+- Button disabled state (not removal) when nothing is finished, so the affordance is always visible and self-explanatory (tooltip: "Remove finished jobs from the list (running jobs keep going)").
+- No persistence exists for jobs, so nothing else needs clearing; the upload folder is deliberately untouched.
+
+**Verification.** `py_compile` OK. Scratch server (:8099) restarted with the new code; `dev-scan` includes `/tmp/printer*`, so a **FIFO** (`/tmp/printerSlow`) with a 3 s-delayed reader stood in for a slow cutter:
+
+- fresh start → `GET /api/jobs` empty
+- print #1 to `/dev/null` → `done`
+- switched device to the FIFO, print #2 → job sat `printing` for the ~3 s window
+- `DELETE /api/jobs` **mid-run** → `{"cleared": 1}` (only the finished job); the printing job stayed listed
+- after the reader started, job #2 completed normally → `done | 13 bytes written to /tmp/printerSlow` (active job unaffected, result reported)
+- second `DELETE` → `{"cleared": 1}` (the just-finished one)
+- served `/` contains the button wiring (3× `jobs-clear`); UI opened in the in-app browser
+
+---
+
+## 2026-08-31 — Sortable file list (click column headers)
+
+**Goal / why.** User: *"add sorting features to files section so that the list can be sorted to asceding or descending from the name, size and upload date".* With a growing upload folder the server's fixed newest-first order isn't always what the user wants — e.g. hunting for a file alphabetically or finding the biggest design.
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `static/index.html` | Name/Size/Uploaded `<th>`s are now clickable (`.sortable`, `data-key`, hover highlight, accent `▲`/`▼` indicator on the active column). New `sortFiles()` sorts by `name` (locale-aware, case-insensitive), `size` or `mtime` (numeric); `state.sort = {key:"mtime", dir:"desc"}` matches the previous server order as the default. Click a column → ascending; click the same column again → flip direction. `renderFiles()` applies the sort **after** the name filter and updates the arrow indicators each render, so both features compose and persist across the 2.5 s refreshes. |
+| `README.md` | Features bullet for sortable columns. |
+
+**Decisions.**
+
+- **Client-side only, `server.py` untouched.** `GET /api/files` already returns name/size/mtime per file and the folder is small; the server's fixed mtime-desc order stays as the initial order, the browser re-sorts it. No API change (a `?sort=` param can be added later if the folder ever grows large).
+- Arrow indicator on the active header (blank on others) instead of styling all three, so the current sort is unambiguous.
+- Case-insensitive `localeCompare` for names so `design` sorts next to `Design`.
+
+**Verification.** `server.py` untouched (no compile). The still-running scratch server (:8099) re-serves the static file: served `/` contains the sortable headers (5× `data-key`), `sortFiles` (1×) and the `#file-headers` wiring (3×); page opened in the in-app browser with the 3 uploaded files — default order (newest first) unchanged, headers show pointer cursor, and clicking a header re-sorts with the direction arrow. Sort/filter interaction (both live in `state`, both re-applied per render) follows the same pattern as the verified search filter.
+
+---
+
+## Open work / ideas
+
+Not started — add new bullet points here as they come up, and move them into a dated entry when they get done.
+
+- **Deploy on the Linux cutter box — IN PROGRESS.** Printing fails with `Permission denied`; `sudo usermod -aG lp $USER` reportedly did not help and `chmod` on the node resets at boot. Known facts: node is `crw-rw---- root lp` (mode 660, group `lp`); the machine currently has **both** `/dev/usb/lp0` and `/dev/usb/lp1` (numbers shift between boots/replugs). Remaining steps for the user: re-login (groups apply to new sessions only) → **restart the app** (a running process keeps its old groups — most likely why `usermod` "didn't help") → `: > /dev/usb/lp0 && echo ok`. If it still fails: is the app run under a systemd service? Then add `SupplementaryGroups=lp` (documented in README). If the node's group is not `lp` on that distro, the in-UI fix hint + `ls -l /dev/usb/lp*` will show which group is required. The new header dropdown now lists both `lp0`/`lp1` automatically, so the wrong-node half of the problem is covered. Still open: user to paste `lsusb` output so we can write the exact stable-`/dev/vinylcutter` udev symlink rule (recipe with placeholders is in the README).
+- **A live test instance is still running** on this Mac: pid in `/tmp/vcwui.pid`, port **8099**, started with `--printer-dev /dev/null --dev-scan "/dev/null,/tmp/printer*"` (fake LP nodes in `/tmp`; stop: `kill $(cat /tmp/vcwui.pid)`).
+- Ideas not yet requested (do only if the user asks): print progress via bytes written, job cancel, basic auth token, HTML→HPGL preview of what will be cut, persisting the UI device choice across restarts (currently runtime-only on purpose).
