@@ -93,17 +93,37 @@ button.danger:hover { border-color: var(--red); color: var(--red); }
 button.small { padding: 5px 10px; font-size: 12.5px; }
 
 /* file table */
+/* overflow-x: last-resort containment — if a very long name makes the
+   columns wider than a narrow window, the table scrolls inside the card
+   instead of spilling over it (never triggered for normal names) */
+.table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); }
 th { font-size: 11.5px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); font-weight: 600; }
 tr:last-child td { border-bottom: none; }
-td.name { font-family: var(--mono); font-size: 13px; word-break: break-all; }
+td.name {
+  font-family: var(--mono); font-size: 13px;
+  /* keep the name unbreakable so its column min-width = content width
+     (break-all would let the auto layout squeeze it below its content
+     and wrap short names); the spacer column then absorbs ALL slack.
+     max-width bounds pathologically long names (the table would otherwise
+     overflow the card); ellipsis + a JS-set tooltip cover the clipped tail */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 560px;
+}
 td.num { color: var(--dim); white-space: nowrap; font-size: 13px; }
+/* name/size/uploaded hug their content (auto layout, no clipping); the
+   spacer column absorbs the table's slack so the gap lands between
+   Uploaded and Actions, and the Actions column (sized to its buttons)
+   stays pinned to the right edge with its header above Cut */
+th:nth-child(5), td:nth-child(5) { overflow: hidden; }  /* actions = col 5 (spacer is 4) */
+th.spacer, td.spacer { width: 100%; }
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--text); }
 th .arrow { color: var(--accent); font-size: 10px; }
-td.actions { text-align: right; }
-.row-actions { white-space: nowrap; display: inline-flex; gap: 6px; }
+/* the narrow Actions column: header left edge lines up with Cut, and
+   Delete ends at the table's right edge */
+.row-actions { white-space: nowrap; display: flex; justify-content: space-between; gap: 6px; }
 .empty { color: var(--dim); text-align: center; padding: 18px 0; font-size: 13.5px; }
 
 /* jobs */
@@ -142,7 +162,9 @@ td.actions { text-align: right; }
 #toast.warn  { border-color: var(--amber); color: var(--amber); }
 
 @media (max-width: 640px) {
+  th.spacer, td.spacer { display: none; }  /* no slack left to absorb on narrow screens */
   th:nth-child(3), td:nth-child(3) { display: none; }
+  td.name { white-space: normal; word-break: break-all; max-width: 100%; }  /* names wrap so rows fit narrow screens */
   .card h2 input { width: 110px; }
 }
 </style>
@@ -169,15 +191,18 @@ td.actions { text-align: right; }
   <div class="card">
     <h2>Files <span class="count" id="file-count">0</span>
       <input type="search" id="file-search" placeholder="filter by name…" autocomplete="off"></h2>
+    <div class="table-wrap">
     <table>
       <thead id="file-headers"><tr>
         <th data-key="name" class="sortable" title="sort by name">Name <span class="arrow"></span></th>
         <th data-key="size" class="sortable" title="sort by size">Size <span class="arrow"></span></th>
         <th data-key="mtime" class="sortable" title="sort by upload date">Uploaded <span class="arrow"></span></th>
-        <th style="text-align:right">Actions</th>
+        <th class="spacer"></th><!-- absorbs table slack: gap goes here, before Actions -->
+        <th>Actions</th>
       </tr></thead>
       <tbody id="file-rows"></tbody>
     </table>
+    </div>
     <div class="empty" id="files-empty">No files uploaded yet.</div>
   </div>
 
@@ -265,7 +290,8 @@ function renderFiles() {
     actions.className = "row-actions";
 
     const printBtn = document.createElement("button");
-    printBtn.textContent = "✂ Cut";  /* it's a cutter — the action cuts */
+    printBtn.textContent = "Cut";  /* it's a cutter — the action cuts */
+    printBtn.className = "primary";  /* main action → blue highlight, like the upload section */
     printBtn.disabled = !f.printable;
     printBtn.title = f.printable ? `cat ${f.name} > ${state.cfg.printer_dev || "printer"}` : "File type not allowed";
     printBtn.onclick = () => printFiles([f.name]);
@@ -279,9 +305,12 @@ function renderFiles() {
 
     /* actions must live inside a <td> — a bare <div> appended to <tr> gets
        foster-parented out of the table by the browser */
-    tr.innerHTML = `<td class="name">${esc(f.name)}</td><td class="num">${fmtSize(f.size)}</td><td class="num">${fmtTime(f.mtime)}</td><td class="actions"></td>`;
+    tr.innerHTML = `<td class="name">${esc(f.name)}</td><td class="num">${fmtSize(f.size)}</td><td class="num">${fmtTime(f.mtime)}</td><td class="spacer"></td><td class="actions"></td>`;  /* spacer (col 4) must stay before actions (col 5) */
     tr.lastElementChild.appendChild(actions);
     tbody.appendChild(tr);
+    /* tooltip with the full name only when it is actually clipped (very long names) */
+    const nameTd = tr.firstElementChild;
+    nameTd.title = nameTd.scrollWidth > nameTd.clientWidth ? f.name : "";
   }
 }
 

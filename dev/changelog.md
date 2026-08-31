@@ -303,6 +303,138 @@ Running log of every change to this project. **Oldest first** — read top to bo
 
 ---
 
+## 2026-08-31 — Project moved under git + MIT license (user change)
+
+**Goal / why.** User: *"I have added this to git and added .git folder and license"* — the project is now a proper git repository with an explicit license, so the history (and this changelog) can be shared/forked.
+
+**Changes.** (made by the user, not an agent — recorded here so future sessions know the baseline)
+
+| File | What |
+|---|---|
+| `.git` | Repo initialized. Two commits: `12e1155` "Initial commit" (2-line placeholder README + LICENSE) and `3288b1d` "initial commit" (the full project: `server.py`, `static/index.html`, `README.md`, `dev/changelog.md`, `AGENTS.md`, `.gitignore`). Working tree clean. |
+| `LICENSE` | New: MIT, copyright 2026 anakuron. |
+| `README.md` | Added a one-line "License" section pointing at LICENSE. (The user's placeholder 2-line README was replaced by the full README in the second commit.) |
+| `.gitignore` | Unchanged — `uploads/`, `__pycache__/`, `*.pyc`. Confirmed `git ls-files` tracks only the app files; user uploads are never committed. |
+
+**Decisions.**
+
+- MIT is a permissive license — fits the "copy two files and deploy" spirit; no change to the zero-deps or no-auth design.
+- The `uploads/` upload dir stays out of git (user data, gitignored) — a fresh clone starts with an empty upload folder by design.
+
+**Verification.** `git status` clean; `git ls-tree HEAD` = `.gitignore AGENTS.md LICENSE README.md dev server.py static`; LICENSE is the standard MIT text. No code touched.
+
+---
+
+## 2026-08-31 — Consistent button styling: Cut button de-emojied + blue highlight
+
+**Goal / why.** User: *"the buttons are not consistent at the moment… Cut button has a emoji, but other buttons don't so remove the emoji from the cut button, keep it in the page logo only… the cut button has it's own hover color it should be blue instead like in the upload section. Change only these and nothing else".*
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `static/index.html` | (1) Per-file button text `"✂ Cut"` → `"Cut"` — the ✂️ glyph now exists only in the page logo. (2) Button gets the existing `button.primary` class: blue (`--accent`) background with lighter-blue hover (`#6fd0ff`), dark text — the same highlight language the upload dropzone uses on hover. Non-printable files still render it disabled (opacity .45 via the existing `button:disabled` rule). CSS untouched. |
+
+**Decisions.**
+
+- Reused `button.primary` instead of adding a new hover rule: it *is* the page's blue-highlight style (and the lighter-blue hover of `.primary:hover` is the only blue hover in the sheet), so the main action now matches the accent color used for success-ish highlighting. All other buttons keep their current styling (Delete / Clear all: neutral with red hover, per the red-for-destructive convention).
+- `button.primary` rules sit after `button:hover` in the sheet, so on hover the border stays accent-colored and only the background lightens — consistent with the dropzone's accent border on hover.
+
+**Verification.** `server.py` untouched. The running scratch server (:8099) re-serves the static file: served `/` contains exactly one ✂ (the logo) and the `className = "primary"` wiring (1×); page opened in the in-app browser — Cut buttons render blue, Delete/Clear-all unchanged. One pre-existing inconsistency was flagged to the user for a decision (amber warning color, see below); no other buttons touched.
+
+---
+
+## 2026-08-31 — Design decisions confirmed: keep amber, keep red Delete/Clear-all
+
+**Goal / why.** Follow-up to the button-consistency change: user confirmed *"let's keep the amber color, clear all and delete buttons are correct as well"* — closing the two open design questions so a future session doesn't "fix" them.
+
+**Changes.** None (code/docs unchanged — the current styling is now the confirmed baseline). This entry only records the decisions; the Open work bullet for the palette question was removed.
+
+**Decisions (binding for future styling work).**
+
+- **The UI palette is intentionally 4 colors:** blue (`--accent`) = highlight/primary action, red = error & removal, green = success/done, **amber = warning** (warning toasts, e.g. skipped file types; permission-error job-hint block). Do not collapse amber into the other three.
+- **"Delete" and "Clear all" keep the neutral button + red hover** (`.danger`) — both are removal actions, and this is confirmed correct by the user.
+
+**Verification.** Not needed — no code or docs changed; decision recorded for future sessions.
+
+---
+
+## 2026-08-31 — Actions column left-aligned like the other columns
+
+**Goal / why.** User: *"in the files tile, all other titles are aligned to left, but actions is aligned to right, it should also be aligned left so it's consistent".*
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `static/index.html` | Removed the `style="text-align:right"` from the Actions `<th>` and deleted the `td.actions { text-align: right; }` rule — header **and** the button cells now inherit the base left alignment of every other column (the `.row-actions` inline-flex row simply sits at the left). |
+
+**Decisions.**
+
+- The buttons were also moved left (not just the header): a left-aligned header over right-hanging buttons would have looked less consistent than the current all-left layout.
+
+**Verification.** `server.py` untouched. The running scratch server (:8099) re-serves the static file: served `/` contains no `td.actions` and no `text-align:right` at all; page opened in the in-app browser — Actions header and buttons left-aligned, flush with the Name column's text.
+
+---
+
+## 2026-08-31 — Actions cell: header left, Delete pinned to the column's right edge
+
+**Goal / why.** Follow-up to the left-alignment change: with everything left-aligned the Actions column left an ugly gap at the right end of the table. User: *"can you align the last column actions so that the last item of it (delete) aligns to the end".*
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `static/index.html` | `.row-actions` switched from `inline-flex` (content-width, hugs left) to `display: flex; justify-content: space-between` — a block-level flex row that spans the full cell: Cut stays left (under the left header) while Delete is pushed to the right edge of the table. No other rules touched. |
+
+**Decisions.**
+
+- `space-between` (rather than `margin-left:auto` on Delete) — same result with two buttons, and it degrades sensibly if a third action button is ever added.
+- Keeps the previously confirmed layout: all column headers left-aligned, no right-aligned header.
+
+**Verification.** `server.py` untouched. The running scratch server (:8099) re-serves the static file with the new rule (confirmed in served HTML); page opened in the in-app browser — Cut sits under the Actions header, Delete aligns with the table's right edge, no dead space.
+
+---
+
+## 2026-08-31 — Actions column shrink-to-fit: buttons hug right edge, title stays left
+
+**Goal / why.** Correction of the previous layout attempt: `space-between` stretched the buttons across a wide Actions column, which the user didn't want. Their intent: *"shrink the whole column size, since the width is too long so that it hugs the contents and aligns the whole section to the right end but still keeps the title at the left".*
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `static/index.html` | `.row-actions` back to `inline-flex` (content-width, no stretching) + re-added `td.actions { text-align: right }` so the content-width button row hugs the right edge of the cell. The Actions column is now only as wide as its content (buttons); in the auto table layout the break-all **Name** column absorbs the remaining table width, so the narrow Actions column sits at the table's right end. Header "Actions" keeps the base left alignment, as previously requested. |
+
+**Decisions.**
+
+- Content-width row + right-aligned cell instead of `space-between`: the column hugs the buttons (no dead space *inside* the column), and the slack moves entirely to the Name column — exactly the layout the user described.
+- Header left inside the narrow column is the confirmed target (left headers were a firm requirement from the previous round).
+
+**Verification.** `server.py` untouched. The running scratch server (:8099) re-serves the static file (new rules confirmed in served HTML); page opened in the in-app browser — Actions column is now narrow (button-width), Delete ends at the table's right edge, "Actions" title left-aligned in the column, Name column takes the slack.
+
+---
+
+## 2026-08-31 — File table: deterministic column widths, "Actions" title lines up with Cut
+
+**Goal / why.** Follow-up correction: with the shrink-to-fit attempt the Actions column was still browser-stretched wider than its buttons, so the left-aligned "Actions" title no longer sat above the Cut button. User's spec: *"a full width table inside the card, but the last section (actions) is aligned to the right in a way that the headline is aligned vertically to the left item (cut) so it's consistent to other items in the table, there can be empty space between the actions and uploaded".*
+
+**Changes.**
+
+| File | What |
+|---|---|
+| `static/index.html` | `table-layout: fixed` + explicit widths on the non-Name columns: Size 90 px, Uploaded 110 px, **Actions 150 px** (≈ exact button-row width incl. cell padding); only the Name column is variable, so it absorbs all the table slack and the table stays full-width. Numeric columns got `overflow: hidden` against locale/size string surprises. Button row is `flex; justify-content: space-between` across the narrow fixed cell — Cut's left edge now lands exactly under the (left-aligned) header, Delete ends at the table's right edge, with at most a few px between the two. |
+
+**Decisions.**
+
+- `table-layout: fixed` is the key: with auto layout the browser distributes leftover width to *all* columns (not only Name), which is what kept stretching the Actions column and misaligning the title. Fixed widths make the geometry deterministic; the 150 px Actions width has ~4 px of headroom over the measured button row (≈126 px + 20 px cell padding), so even if button text metrics drift slightly, Cut stays flush under the header.
+- `space-between` is back on purpose: with a *fixed narrow* column (unlike the earlier wide-column version that the user rejected), the internal Cut–Delete gap is a few pixels — invisible — while space-between guarantees header/Cut alignment regardless of width drift.
+- The slack lives in the Name column (long names wrap, as before) rather than between Uploaded and Actions; either way the user accepted "empty space between actions and uploaded" as tolerable, and the visual result matches their spec: Actions block at the right end, title above Cut.
+
+**Verification.** `server.py` untouched. The running scratch server (:8099) re-serves the static file (fixed-layout rules confirmed in served HTML); page opened in the in-app browser — table is full-width, Size/Uploaded/Actions columns hug their content, "Actions" title sits directly above Cut, Delete ends at the card's right edge, Name absorbs the remainder. Mobile (≤640 px) hides the Uploaded column as before; fixed widths still apply.
+
+---
+
 ## Open work / ideas
 
 Not started — add new bullet points here as they come up, and move them into a dated entry when they get done.

@@ -199,3 +199,7 @@ sudo systemctl enable --now vinylcutter-webui
   (`ssh -L 8080:localhost:8080 user@server`).
 - There is no authentication by design (it's a small LAN tool). Upload names are
   sanitized to `[A-Za-z0-9._-]` and only the allowed extensions are accepted.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
