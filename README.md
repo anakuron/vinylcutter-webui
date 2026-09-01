@@ -17,7 +17,10 @@ cat design.hpgl > /dev/usb/lp1
   `cat <file> > <printer-dev>` for you; jobs run one at a time in queue order.
 - **Switch the printer from the page header** — a dropdown lists every auto-detected
   device, so boxes with several `lpX` nodes (or a `vinylcutter` symlink) can change
-  the print target without restarting the server.
+  the print target without restarting the server. Each entry shows the device's USB
+  identity (manufacturer + product) when it can be read from sysfs,
+  e.g. `/dev/usb/lp0 - samsung 2010` — no `lsusb` or extra packages needed; if the
+  identity can't be read (non-Linux host, non-USB device) the bare path is shown.
 - **Search box** to filter the file list by name (client-side, no reload).
 - **Preview** button per file — opens a 2D drawing of the cut in a modal. The HPGL
   is parsed in the browser (no server-side rendering); pen-up travel shows as a faint
@@ -53,6 +56,7 @@ CLI flags or environment variables:
 | `--print-timeout` | `PRINT_TIMEOUT` | `600` | Seconds to wait for a print job |
 | `--dev-scan` | `DEV_SCAN` | `/dev/usb/lp*,/dev/lp*` | Comma-separated globs for auto-detecting printer devices in the UI dropdown |
 | `--max-upload-mb` | `MAX_UPLOAD_MB` | `100` | Max upload size |
+| — | `SYSFS` | `/sys` | sysfs root, used to read the USB identity shown next to each printer device |
 
 Example:
 
@@ -172,7 +176,9 @@ sudo systemctl enable --now vinylcutter-webui
 - A single worker thread runs jobs serially (the printer can only take one job):
   `sh -c 'cat <abs path> > <currently selected device>'` (default `/dev/usb/lp1`),
   then reports byte count or the error.
-- If the machine has several `lpX` nodes, pick the right one in the page header;
+- If the machine has several `lpX` nodes, pick the right one in the page header —
+  each dropdown entry shows the USB identity read from sysfs (manufacturer + product,
+  or `idVendor:idProduct` as a fallback) so `lp0`/`lp1` can be told apart;
   the selected device is shown in the `cat →` job message and in the fix hint.
 - A non-zero exit / signal (e.g. the device rejecting writes when the printer is
   offline) is reported in the job list.
@@ -195,7 +201,7 @@ sudo systemctl enable --now vinylcutter-webui
 | `POST` | `/api/print` | `{"files": ["a.hpgl", "b.hpgl"]}` or `{"file": "a.hpgl"}` — enqueues jobs |
 | `GET` | `/api/jobs` | Job queue/status (newest first) |
 | `GET` | `/api/config` | Printer device, upload dir, allowed extensions |
-| `GET` | `/api/devices` | Auto-detected devices (`[{path, exists}]`) + currently selected one |
+| `GET` | `/api/devices` | Auto-detected devices (`[{path, exists, label}]`) + currently selected one |
 | `POST` | `/api/devices` | `{"device": "/dev/usb/lp0"}` — switch print target (affects subsequent jobs only) |
 
 ## Security notes

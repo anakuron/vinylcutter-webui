@@ -12,7 +12,7 @@ Run:
     python3 server.py --port 8080 --printer-dev /dev/usb/lp1 --upload-dir /var/lib/vinylcutter
 
 Everything can also be configured via environment variables:
-    PORT, BIND, UPLOAD_DIR, PRINTER_DEV, ALLOWED_EXTS, PRINT_TIMEOUT, MAX_UPLOAD_MB, DEV_SCAN
+    PORT, BIND, UPLOAD_DIR, PRINTER_DEV, ALLOWED_EXTS, PRINT_TIMEOUT, MAX_UPLOAD_MB, DEV_SCAN, SYSFS
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import mimetypes
 import os
 import re
 import shlex
+import stat
 import subprocess
 import threading
 import time
@@ -36,6 +37,9 @@ from urllib.parse import parse_qs, urlparse
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
+
+# sysfs root; overridable (SYSFS env) for testing or non-standard mounts.
+SYSFS = Path(os.environ.get("SYSFS", "/sys"))
 
 # Filled in from CLI/env in main().
 CFG: dict = {}
@@ -170,6 +174,59 @@ def _is_printable(path: Path) -> bool:
     return path.suffix.lower().lstrip(".") in CFG["allowed_exts"]
 
 
+def _sysfs_text(path: Path, max_bytes: int = 64) -> str:
+    try:
+        return path.read_bytes()[:max_bytes].decode("utf-8", "replace").strip()
+    except OSError:
+        return ""
+
+
+def _usb_label_from_syslink(link: Path) -> str | None:
+    """Walk a /sys/dev/char/M:m entry up to the USB device and read its identity."""
+    if not link.is_symlink():
+        return None
+    try:
+        dev = (link.parent / os.readlink(link)).resolve()
+    except OSError:
+        return None
+    # Kernel device dir; `device` points at the physical (USB) device.
+    if (dev / "device").is_symlink():
+        dev = (dev / "device").resolve()
+    # USB interface dirs (usb/lp or lp class) have no idVendor — walk up to the usb device.
+    for _ in range(6):
+        if (dev / "idVendor").is_file():
+            break
+        if dev.parent == dev:
+            return None
+        dev = dev.parent
+    if not (dev / "idVendor").is_file():
+        return None
+    name = " ".join(
+        part for part in (_sysfs_text(dev / "manufacturer"), _sysfs_text(dev / "product")) if part)
+    if name:
+        return name
+    vid, pid = _sysfs_text(dev / "idVendor"), _sysfs_text(dev / "idProduct")
+    if vid and pid:
+        return f"{vid}:{pid}"
+    return None
+
+
+def _usb_label(device_path: str) -> str | None:
+    """Human-readable identity of a device node (e.g. "samsung 2010").
+
+    Resolves the node's major:minor through sysfs — works for both the raw
+    /dev/usb/lpX nodes (usb/lp driver) and /dev/lpX class nodes (lp driver).
+    None when undeterminable (non-Linux host, missing node, non-USB device)."""
+    try:
+        st = os.stat(device_path)
+    except OSError:
+        return None
+    if not stat.S_ISCHR(st.st_mode):
+        return None
+    link = SYSFS / "dev" / "char" / f"{os.major(st.st_rdev)}:{os.minor(st.st_rdev)}"
+    return _usb_label_from_syslink(link)
+
+
 def _list_printer_devices() -> list:
     """Auto-detected LP devices (dev-scan globs) plus the currently configured one."""
     found: dict = {}
@@ -177,7 +234,7 @@ def _list_printer_devices() -> list:
         for p in glob.glob(pat):
             found[p] = True
     found.setdefault(CFG["printer_dev"], os.path.exists(CFG["printer_dev"]))
-    return [{"path": p, "exists": e} for p, e in sorted(found.items())]
+    return [{"path": p, "exists": e, "label": _usb_label(p)} for p, e in sorted(found.items())]
 
 
 def _valid_device_path(p: str) -> bool:
@@ -433,7 +490,7 @@ class Handler(BaseHTTPRequestHandler):
             self._error(400, "device must be a /dev/... path or match a --dev-scan pattern")
             return
         CFG["printer_dev"] = dev
-        self._json(200, {"current": dev})
+        self._json(200, {"current": dev, "label": _usb_label(dev)})
 
     # -- DELETE ----------------------------------------------------------------
 
@@ -514,7 +571,9 @@ def main() -> None:
     print(f"Vinyl Cutter Web UI → http://{args.bind}:{args.port}")
     print(f"  uploads : {CFG['upload_dir']}   (accepted: {exts})")
     print(f"  printer : {CFG['printer_dev']}   (cat <file> > {CFG['printer_dev']})")
-    found = ", ".join(d["path"] for d in _list_printer_devices())
+    found = ", ".join(
+        d["path"] + (f" - {d['label']}" if d["label"] else "")
+        for d in _list_printer_devices())
     print(f"  devices : {found or '(none found)'}   (switchable in the UI)")
     print("  ctrl-c to stop", flush=True)
     try:

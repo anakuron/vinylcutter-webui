@@ -395,14 +395,14 @@ async function loadDevices() {
     const d = await api("/api/devices");
     state.cfg.printer_dev = d.current;
     const sel = document.getElementById("printer-select");
-    const key = d.current + "|" + d.devices.map(x => x.path).join(",");
+    const key = d.current + "|" + d.devices.map(x => x.path + "|" + (x.label || "")).join(",");
     if (key === state.devicesKey) return;  /* unchanged — don't touch an open dropdown */
     state.devicesKey = key;
     sel.innerHTML = "";
     for (const dev of d.devices) {
       const o = document.createElement("option");
       o.value = dev.path;
-      o.textContent = dev.path + (dev.exists ? "" : " (missing)");
+      o.textContent = dev.path + (dev.label ? " - " + dev.label : "") + (dev.exists ? "" : " (missing)");
       sel.appendChild(o);
     }
     sel.value = d.current;
@@ -419,7 +419,7 @@ document.getElementById("printer-select").addEventListener("change", async (e) =
       body: JSON.stringify({ device: dev }),
     });
     state.cfg.printer_dev = d.current;
-    toast(`printer → ${d.current}`);
+    toast(`printer → ${d.current}${d.label ? " - " + d.label : ""}`);
   } catch (err) {
     toast(`Could not set printer: ${err.message}`, "error");
     await loadDevices();  /* revert the selection */
