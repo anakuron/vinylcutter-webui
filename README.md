@@ -19,6 +19,11 @@ cat design.hpgl > /dev/usb/lp1
   device, so boxes with several `lpX` nodes (or a `vinylcutter` symlink) can change
   the print target without restarting the server.
 - **Search box** to filter the file list by name (client-side, no reload).
+- **Preview** button per file — opens a 2D drawing of the cut in a modal. The HPGL
+  is parsed in the browser (no server-side rendering); pen-up travel shows as a faint
+  dashed line, the cut path in blue, with the drawing size in inches. Binary HPGL/2
+  files (large-format plotters) can't be rendered and show `hpgl/2 not supported` —
+  printing them still works as usual.
 - **Sortable file list** — click the Name, Size or Uploaded column headers to sort
   ascending/descending (click again to flip direction).
 - Live job status (queued → printing → done / error) and file deletion from the UI.
@@ -183,6 +188,7 @@ sudo systemctl enable --now vinylcutter-webui
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/files` | List uploaded files (name, size, mtime, printable) |
+| `GET` | `/api/file?name=design.hpgl` | Raw file bytes (for the in-browser drawing preview) |
 | `POST` | `/api/upload` | `multipart/form-data`, field `files` (multiple allowed) |
 | `DELETE` | `/api/files?name=design.hpgl` | Delete an uploaded file |
 | `DELETE` | `/api/jobs` | Clear finished jobs from the in-memory log (`{"cleared": n}`) |

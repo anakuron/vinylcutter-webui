@@ -283,6 +283,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._serve_static()
             elif url.path == "/api/files":
                 self._api_files()
+            elif url.path == "/api/file":
+                self._api_file()
             elif url.path == "/api/jobs":
                 with _jobs_lock:
                     jobs = sorted(_jobs.values(), key=lambda j: j["created"], reverse=True)
@@ -304,6 +306,25 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception as exc:  # noqa: BLE001
             self._error(500, f"internal error: {exc}")
+
+    def _api_file(self) -> None:
+        """Raw file bytes for the in-browser drawing preview (GET /api/file?name=NAME).
+
+        octet-stream on purpose: binary HPGL/2 files must reach the browser
+        byte-exact so the UI can detect and reject them."""
+        qs = parse_qs(urlparse(self.path).query)
+        name = (qs.get("name") or [""])[0]
+        path = _upload_path(name)
+        if path is None or not path.is_file():
+            self._error(404, "file not found")
+            return
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _api_files(self) -> None:
         files = []
