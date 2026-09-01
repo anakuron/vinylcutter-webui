@@ -30,6 +30,8 @@ cat design.hpgl > /dev/usb/lp1
 - **Sortable file list** — click the Name, Size or Uploaded column headers to sort
   ascending/descending (click again to flip direction).
 - Live job status (queued → printing → done / error) and file deletion from the UI.
+  The page polls every 2.5 s but re-renders only when the data actually changed, and a
+  re-render never moves your scroll position — the page stays put even with a big file list.
 - Single file to deploy: `server.py` + `static/index.html`.
 
 ## Quick start

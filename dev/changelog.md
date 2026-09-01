@@ -504,6 +504,35 @@ Running log of every change to this project. **Oldest first** — read top to bo
 
 ---
 
+## 2026-09-01 — Quiet refresh: no-op polls stop touching the DOM, scroll never jumps
+
+**Goal / why.** User: *"when running in actual server with many files (16) the page reloads or refreshes continuously (every 2sec or so) and when it reloads it scrolls to the top of the page which makes this hard to use".* The page never actually reloads — the 2.5 s background poll unconditionally rebuilt the whole file table and the job list (`innerHTML = ""` + re-append every 2.5 s), and each rebuild makes the browser's scroll anchoring re-evaluate the viewport, so with a tall list the view jumped while reading.
+
+**Changes.** (`static/index.html` only — `server.py` untouched, and the server serves the static file per request, so no restart is needed to deploy this)
+
+| File | What |
+|---|---|
+| `static/index.html` | (1) `renderFiles()` now computes a render key — `JSON.stringify([filter, sort, cfg.printer_dev, files])` — and returns early when it equals the previous render: in steady state the poll does **not** touch the table at all (no flicker, no layout churn). `cfg.printer_dev` is in the key so switching the printer in the header re-renders the rows and the per-row Cut tooltips (which embed the device path) stay current. (2) `renderJobs()` gets the same early return, keyed on the whole jobs payload. (3) New `withPreservedScroll(fn)` helper: saves `scrollTop` of `document.scrollingElement` and every `.table-wrap`, runs `fn`, restores immediately **and** again on a double `requestAnimationFrame` (after the new frame has laid out and the browser's scroll anchoring has had its say). `refresh()` wraps both renders in it, and so do the search-filter and sort-click handlers. |
+| `README.md` | One sentence on the job-status feature bullet: polls every 2.5 s, re-renders only on real change, never moves your scroll position. |
+
+**Decisions.**
+
+- **Two-layer fix, in that order.** The key comparison kills the churn in the common case (nothing changed between polls → the page is literally static, which is what "constantly refreshing" was); scroll preservation covers the cases that *do* rebuild (new job, file added/deleted, filter/sort, printer switch) so the viewport stays where the user is even though content below/around them changes. Lengthening the poll interval was deliberately **not** done — it would only delay job-status updates and would still jump on the changes that do happen.
+- Full `JSON.stringify` comparison (no diffing library, zero deps): the payloads are tiny (a few dozen entries) and the cost is negligible against the 2.5 s cycle.
+- The device select was already change-gated (`devicesKey`) in an earlier round; it needed no change. The toast is `position:fixed` and never affects layout, so it's outside the concern.
+
+**Verification.** Frontend-only round; verified in **real headless Chrome driven over CDP** (Node's built-in WebSocket, no deps) against a scratch server on :8097 with a scratch upload dir containing **16** `.hpgl` files (the user's trigger case), window 1280×600 — all 10 checks PASS:
+
+- page renders 16 rows; scrolled to `y=300`
+- 8 s of polling (3+ cycles, identical data) → the first row's **original DOM node is still in place** (zero rebuilds) and `scrollY` is still 300
+- triggered a print (job queued→done) → the job list rebuilt, the file-table row node was **kept**, `scrollY` 300, pill shows `done`
+- `DELETE`d one file → the file table rebuilt (15 rows, the marked row gone) and `scrollY` still 300
+- zero page JS exceptions across the whole run
+
+Scratch server + fake files removed after the test. `server.py` untouched (no compile needed). **Not verified on the user's Linux box** — user to confirm the list no longer jumps with their 16 files.
+
+---
+
 ## Open work / ideas
 
 Not started — add new bullet points here as they come up, and move them into a dated entry when they get done.

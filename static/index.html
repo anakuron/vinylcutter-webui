@@ -261,7 +261,7 @@ th .arrow { color: var(--accent); font-size: 10px; }
 <script>
 "use strict";
 
-const state = { files: [], jobs: [], cfg: {}, devicesKey: "", search: "",
+const state = { files: [], jobs: [], cfg: {}, devicesKey: "", filesKey: "", jobsKey: "", search: "",
                  sort: { key: "mtime", dir: "desc" } };  /* matches the server default (newest first) */
 let toastTimer = null;
 
@@ -289,6 +289,20 @@ function esc(s) {
   return d.innerHTML;
 }
 
+/* Rebuilding the table/job DOM is the one thing that can jolt the viewport
+   (the browser's scroll anchoring reacts when the rows are torn down and
+   re-laid-out). Save the scroll positions, run the rebuild, restore immediately
+   and once more after the new frame has laid out — the page never jumps when
+   a poll or an action re-renders while the user is reading lower down. */
+function withPreservedScroll(fn) {
+  const saved = [document.scrollingElement, ...document.querySelectorAll(".table-wrap")].map(
+    el => (el ? [el, el.scrollTop] : null));
+  fn();
+  const restore = () => { for (const s of saved) if (s) s[0].scrollTop = s[1]; };
+  restore();
+  requestAnimationFrame(() => requestAnimationFrame(restore));
+}
+
 function fmtSize(n) {
   if (n < 1024) return n + " B";
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
@@ -314,6 +328,14 @@ function renderFiles() {
   const q = state.search.trim().toLowerCase();
   const filtered = q ? state.files.filter(f => f.name.toLowerCase().includes(q)) : state.files;
   const files = sortFiles(filtered);
+
+  /* Skip the rebuild when the rendered state hasn't changed — the 2.5 s poll
+     would otherwise tear the whole table down and re-lay it out (flicker + a
+     scroll jump) even when the file list is identical. cfg.printer_dev is part
+     of the key because each row's Cut tooltip embeds the current device. */
+  const key = JSON.stringify([q, state.sort, state.cfg.printer_dev, files]);
+  if (key === state.filesKey) return;
+  state.filesKey = key;
 
   document.querySelectorAll("#file-headers th[data-key]").forEach(th => {
     const on = th.dataset.key === state.sort.key;
@@ -364,6 +386,10 @@ function renderFiles() {
 }
 
 function renderJobs() {
+  /* skip the rebuild when nothing changed (same reason as in renderFiles) */
+  const key = JSON.stringify(state.jobs);
+  if (key === state.jobsKey) return;
+  state.jobsKey = key;
   const clearBtn = document.getElementById("jobs-clear");
   clearBtn.disabled = !state.jobs.some(j => j.status === "done" || j.status === "error");
   const box = document.getElementById("job-rows");
@@ -431,8 +457,7 @@ async function refresh() {
     const [files, jobs] = await Promise.all([api("/api/files"), api("/api/jobs")]);
     state.files = files.files;
     state.jobs = jobs.jobs;
-    renderFiles();
-    renderJobs();
+    withPreservedScroll(() => { renderFiles(); renderJobs(); });
     loadDevices();
   } catch (err) {
     /* server briefly unreachable — keep polling */
@@ -496,7 +521,7 @@ zone.addEventListener("drop", e => uploadFiles(e.dataTransfer.files));
 
 document.getElementById("file-search").addEventListener("input", e => {
   state.search = e.target.value;
-  renderFiles();  /* keep filtering across the 2.5 s refreshes */
+  withPreservedScroll(renderFiles);  /* keep filtering across the 2.5 s refreshes */
 });
 
 document.querySelectorAll("#file-headers th[data-key]").forEach(th =>
@@ -506,7 +531,7 @@ document.querySelectorAll("#file-headers th[data-key]").forEach(th =>
     state.sort = key === state.sort.key
       ? { key, dir: state.sort.dir === "asc" ? "desc" : "asc" }
       : { key, dir: "asc" };
-    renderFiles();
+    withPreservedScroll(renderFiles);
   }));
 
 document.getElementById("jobs-clear").addEventListener("click", async () => {
